@@ -67,6 +67,7 @@ dependencies = [
  "unicode-width",
  "windows-sys 0.59.0",
  "winit",
+ "x11-clipboard",
  "xdg",
 ]
 
@@ -429,7 +430,6 @@ dependencies = [
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
  "smithay-clipboard",
- "x11-clipboard",
 ]
 
 [[package]]

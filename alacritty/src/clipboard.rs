@@ -1,16 +1,23 @@
+#[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
+use std::error::Error;
+#[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
+use std::sync::Arc;
+#[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
+use std::time::Duration;
+
 use log::{debug, warn};
 use winit::raw_window_handle::RawDisplayHandle;
 
 use alacritty_terminal::term::ClipboardType;
 
-#[cfg(any(feature = "x11", target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows))]
 use copypasta::ClipboardContext;
 use copypasta::ClipboardProvider;
 use copypasta::nop_clipboard::NopClipboardContext;
 #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 use copypasta::wayland_clipboard;
 #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
-use copypasta::x11_clipboard::{Primary as X11SelectionClipboard, X11ClipboardContext};
+use x11_clipboard::{Atom, Clipboard as X11Clipboard};
 
 pub struct Clipboard {
     clipboard: Box<dyn ClipboardProvider>,
@@ -44,9 +51,9 @@ impl Default for Clipboard {
         return Self { clipboard: Box::new(ClipboardContext::new().unwrap()), selection: None };
 
         #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
-        return Self {
-            clipboard: Box::new(ClipboardContext::new().unwrap()),
-            selection: Some(Box::new(X11ClipboardContext::<X11SelectionClipboard>::new().unwrap())),
+        return {
+            let (clipboard, selection) = X11Selection::new_pair().unwrap();
+            Self { clipboard: Box::new(clipboard), selection: Some(Box::new(selection)) }
         };
 
         #[cfg(not(any(feature = "x11", target_os = "macos", windows)))]
@@ -80,5 +87,49 @@ impl Clipboard {
             },
             Ok(text) => text,
         }
+    }
+}
+
+/// Provider for a single X11 selection.
+///
+/// The `CLIPBOARD` and `PRIMARY` selections share one X11 clipboard, since every X11 clipboard
+/// opens its own connections to the X server.
+#[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
+struct X11Selection {
+    clipboard: Arc<X11Clipboard>,
+    selection: Atom,
+}
+
+#[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
+impl X11Selection {
+    /// Create providers for the `CLIPBOARD` and `PRIMARY` selections.
+    fn new_pair() -> Result<(Self, Self), x11_clipboard::error::Error> {
+        let clipboard = Arc::new(X11Clipboard::new()?);
+        let atoms = &clipboard.getter.atoms;
+        let (clipboard_atom, primary_atom) = (atoms.clipboard, atoms.primary);
+
+        Ok((Self { clipboard: clipboard.clone(), selection: clipboard_atom }, Self {
+            clipboard,
+            selection: primary_atom,
+        }))
+    }
+}
+
+#[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
+impl ClipboardProvider for X11Selection {
+    fn get_contents(&mut self) -> Result<String, Box<dyn Error + Send + Sync>> {
+        let atoms = &self.clipboard.getter.atoms;
+        let contents = self.clipboard.load(
+            self.selection,
+            atoms.utf8_string,
+            atoms.property,
+            Duration::from_secs(3),
+        )?;
+        Ok(String::from_utf8(contents)?)
+    }
+
+    fn set_contents(&mut self, contents: String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let atoms = &self.clipboard.setter.atoms;
+        Ok(self.clipboard.store(self.selection, atoms.utf8_string, contents)?)
     }
 }
